@@ -3,9 +3,11 @@ const cors = require('cors');
 const path = require('path');
 const morgan = require("morgan");
 require('dotenv').config();
-const fs = require('fs');
-const handlebars = require('handlebars');
-const { nodeMailerTransporter } = require('./services/mailerTransportLayer');
+const { sendEmail } = require('./services/sendEMail');
+
+// Swagger dependencies
+const swaggerJsdoc = require('swagger-jsdoc');
+const swaggerUi = require('swagger-ui-express');
 
 const app = express();
 
@@ -22,70 +24,90 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan("combined"));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(morgan("dev"));
 
+// Swagger setup
+const swaggerOptions = {
+    swaggerDefinition: {
+        openapi: '3.0.0',
+        info: {
+            title: 'Simple API',
+            version: '1.0.0',
+            description: 'A simple Express API',
+        },
+        servers: [
+            {
+                url: `http://localhost:${process.env.PORT || 3000}`
+            }
+        ],
+    },
+    apis: ['./server.js'], // Path to the API docs
+};
 
-// Get the absolute file path
-const templatePath = path.resolve(__dirname, './templates/contact-us-email-template.html');
-// Load the email template file
-const templateSource = fs.readFileSync(templatePath, 'utf8');
-// Compile the template
-const template = handlebars.compile(templateSource);
+const swaggerDocs = swaggerJsdoc(swaggerOptions);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
-// api for nodemailer
-app.post('/api/use-nodemailer', (req, res) => {
-    // Handle the contact form submission
-    const { name, email, phone_number, subject, message } = req.body;
-    const errors = validateFields(name, email, subject, message);
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     ResendOtp:
+ *       type: object
+ *       required:
+ *         - email
+ *       properties:
+ *         email:
+ *           type: string
+ *           description: The user's email
+ *       example:
+ *         email: cooper@yopmail.com
+ */
 
-    if (Object.keys(errors).length > 0) {
-        return res.status(422).json({ success: false, status: 422, message: "ValidationError", errors });
+/**
+ * @swagger
+ * tags:
+ *   - name: OTP
+ *     description: Operations related to OTP
+ */
+
+/**
+ * @swagger
+ * /api/resend-otp:
+ *   post:
+ *     summary: Resend OTP
+ *     description: Send OTP to the provided email
+ *     tags:
+ *      - OTP
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ResendOtp'
+ *         application/x-www-form-urlencoded:
+ *           schema:
+ *             $ref: '#/components/schemas/ResendOtp'
+ *     responses:
+ *       200:
+ *         description: Otp has been sent to your email.
+ *       422:
+ *         description: Email not provided
+ *       500:
+ *         description: An error occurred
+ */
+app.post('/api/resend-otp', async (req, res) => {
+    const { email } = req.body;
+    if (!email && !isValidEmail(email)) {
+        return res.status(422).json({ message: 'email not provided' });
     }
-
-    // Compile the template with user data
-    const html = template({ name, email, message, phone_number });
-
-    // Compose the email message
-    const mailOptions = {
-        from: email, // Replace with your email address
-        to: 'hobivi3374@anomgo.com', // Replace with the recipient email address
-        subject: subject,
-        html: html
-    };
-
-    // Send the email
-    nodeMailerTransporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-            return res.status(500).json({ success: false, status: 500, message: "An error occurred while sending the email.", error });
-        } else {
-            console.log('Email sent: ' + info.response);
-            return res.status(200).json({ success: true, status: 200, message: "Thank you for contacting us!" });
-        }
-    });
+    try {
+        await sendEmail('otp', email, "Otp", { otp: '6644' })
+        return res.status(200).json({ message: "Otp has been sent to your email." });
+    } catch (error) {
+        console.log("🚀 ~ app.post ~ error:", error)
+        return res.status(500).json({ error });
+    }
 });
-
-// Helper function to validate fields
-function validateFields(name, email, subject, message) {
-    const errors = {}
-    if (!email) {
-        errors.email = "Email is required";
-    } else if (!isValidEmail(email)) {
-        errors.email = "Invalid email format";
-    }
-    if (!subject) {
-        errors.subject = "Subject is required";
-    }
-    if (!name) {
-        errors.name = "Name is required";
-    }
-    if (!message) {
-        errors.message = "Message is required";
-    } else if (message.length > 255) {
-        errors.message = "Character limit exceeded";
-    }
-    return errors;
-}
 
 // Helper function to validate email format
 function isValidEmail(email) {
